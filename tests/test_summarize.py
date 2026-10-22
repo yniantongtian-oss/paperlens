@@ -2,6 +2,8 @@
 
 import json
 
+import pytest
+
 from paperlens.summarize import summarize
 from tests.helpers import long_paper, prompt_body, request_prompt
 
@@ -76,7 +78,7 @@ def test_echo_long_paper_keeps_later_sections(capsys):
     assert "map-reduce" in err
 
 
-def test_json_report_adds_meta_and_normalizes_lists(capture_http):
+def test_json_report_adds_meta_and_normalizes_lists(capture_http, capsys):
     payload = {
         "response": (
             "```json\n"
@@ -101,11 +103,33 @@ def test_json_report_adds_meta_and_normalizes_lists(capture_http):
     assert data["meta"]["chunks"] == 1
     assert data["meta"]["backend"] == "ollama"
     assert data["meta"]["model"] == "qwen3:8b"
+    assert "missing fields" not in capsys.readouterr().err
+
+
+def test_json_missing_fields_are_filled_and_warned(capture_http, capsys):
+    capture_http({"response": '{"tldr": "Only this."}'})
+    report = summarize("A short paper.", backend="ollama", output_format="json")
+    data = json.loads(report)
+    assert data["tldr"] == "Only this."
+    assert data["key_contributions"] == []
+    assert data["method"] == ""
+    assert data["key_results"] == []
+    assert data["reproduction_notes"] == ""
+    assert data["meta"]["backend"] == "ollama"
+    err = capsys.readouterr().err
+    assert "missing fields" in err
+    assert "Filled with defaults" in err
+    for key in ("key_contributions", "method", "key_results", "reproduction_notes"):
+        assert key in err
+
+
+def test_json_array_is_rejected(capture_http):
+    capture_http({"response": "[1, 2]"})
+    with pytest.raises(SystemExit, match="JSON object"):
+        summarize("A short paper.", backend="ollama", output_format="json")
 
 
 def test_invalid_json_report(capture_http):
-    import pytest
-
     capture_http({"response": "this is not json"})
     with pytest.raises(SystemExit, match="JSON"):
         summarize("A short paper.", backend="ollama", output_format="json")

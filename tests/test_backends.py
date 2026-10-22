@@ -7,6 +7,7 @@ import urllib.error
 import pytest
 
 from paperlens import call_backend
+from paperlens.cache import cache_dir, cache_key
 
 CHAT = {"choices": [{"message": {"content": "MODEL REPORT"}}]}
 
@@ -115,7 +116,10 @@ def test_ollama_unreachable(monkeypatch):
 
 
 def test_http_error_is_reported(monkeypatch):
+    calls = []
+
     def boom(req, timeout=None):
+        calls.append(req)
         raise urllib.error.HTTPError(
             req.full_url,
             401,
@@ -127,6 +131,94 @@ def test_http_error_is_reported(monkeypatch):
     monkeypatch.setattr("paperlens.backends.urllib.request.urlopen", boom)
     with pytest.raises(SystemExit, match="HTTP 401"):
         call_backend("paper", "ollama")
+    assert len(calls) == 1
+
+
+def test_retries_after_two_429s_then_succeeds(monkeypatch, capture_http, capsys):
+    delays = []
+    monkeypatch.setattr("paperlens.backends.time.sleep", delays.append)
+    state = {"n": 0}
+
+    def reply(req):
+        state["n"] += 1
+        if state["n"] < 3:
+            raise urllib.error.HTTPError(
+                req.full_url,
+                429,
+                "Too Many Requests",
+                hdrs=None,
+                fp=io.BytesIO(b"slow down"),
+            )
+        return {"response": "recovered"}
+
+    calls = capture_http(reply)
+    assert call_backend("paper", "ollama", timeout=7) == "recovered"
+    assert len(calls) == 3
+    assert [call.timeout_seconds for call in calls] == [7, 7, 7]
+    assert delays == [0.5, 1.0]
+    err = capsys.readouterr().err
+    assert "HTTP 429" in err
+    assert "retrying in 0.5s" in err
+    assert "retrying in 1.0s" in err
+
+
+def test_retries_exhausted_on_5xx(monkeypatch, capture_http):
+    monkeypatch.setattr("paperlens.backends.time.sleep", lambda delay: None)
+
+    def reply(req):
+        raise urllib.error.HTTPError(
+            req.full_url,
+            503,
+            "unavailable",
+            hdrs=None,
+            fp=io.BytesIO(b"down"),
+        )
+
+    capture_http(reply)
+    with pytest.raises(SystemExit, match=r"HTTP 503 from .+ after 3 attempts: down"):
+        call_backend("paper", "ollama")
+
+
+def test_second_call_skips_backend(monkeypatch, capture_http):
+    monkeypatch.setenv("GROQ_API_KEY", "secret-key")
+
+    def reply(req):
+        if req.full_url.startswith("http://localhost:11434"):
+            return {"response": "from-ollama"}
+        return {"choices": [{"message": {"content": "from-groq"}}]}
+
+    calls = capture_http(reply)
+    assert call_backend("same prompt", "ollama", "qwen3:8b") == "from-ollama"
+    assert call_backend("same prompt", "ollama", "qwen3:8b") == "from-ollama"
+    assert len(calls) == 1
+    stored = cache_dir() / cache_key("same prompt", "ollama", "qwen3:8b")
+    assert stored.is_file()
+    assert stored.read_text(encoding="utf-8") == "from-ollama"
+
+    assert call_backend("same prompt", "ollama", "other-model") == "from-ollama"
+    assert call_backend("other prompt", "ollama", "qwen3:8b") == "from-ollama"
+    assert call_backend("same prompt", "groq", "qwen3:8b") == "from-groq"
+    assert len(calls) == 4
+    assert call_backend("same prompt", "ollama", "qwen3:8b") == "from-ollama"
+    assert len(calls) == 4
+
+
+def test_no_cache_calls_backend_again(capture_http):
+    calls = capture_http({"response": "from-model"})
+    assert call_backend("paper", "ollama", no_cache=True) == "from-model"
+    assert call_backend("paper", "ollama", no_cache=True) == "from-model"
+    assert len(calls) == 2
+    assert list(cache_dir().glob("*")) == []
+
+
+def test_cache_key_changes_with_each_field():
+    base = cache_key("prompt", "ollama", "qwen3:8b")
+    assert len(base) == 64
+    assert int(base, 16) >= 0
+    assert base == cache_key("prompt", "ollama", "qwen3:8b")
+    assert base != cache_key("other", "ollama", "qwen3:8b")
+    assert base != cache_key("prompt", "groq", "qwen3:8b")
+    assert base != cache_key("prompt", "ollama", "other")
 
 
 def test_unknown_backend():

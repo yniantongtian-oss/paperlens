@@ -25,12 +25,17 @@ class FakeResponse:
 
 @pytest.fixture
 def capture_http(monkeypatch: pytest.MonkeyPatch):
-    """Patch urlopen and record each request. *reply* is a payload or a function."""
+    """Patch urlopen and record each request. *reply* is a payload or a function.
+
+    Each request grows a ``timeout_seconds`` attribute with the timeout that
+    ``urlopen`` received.
+    """
 
     def install(reply: dict[str, Any] | Callable[..., dict[str, Any]]):
         calls = []
 
         def fake(req, timeout=None):
+            req.timeout_seconds = timeout
             calls.append(req)
             payload = reply(req) if callable(reply) else reply
             return FakeResponse(payload)
@@ -39,3 +44,9 @@ def capture_http(monkeypatch: pytest.MonkeyPatch):
         return calls
 
     return install
+
+
+@pytest.fixture(autouse=True)
+def isolated_cache(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    """Keep response caches out of the home directory and out of other tests."""
+    monkeypatch.setenv("PAPERLENS_CACHE", str(tmp_path / "paperlens-cache"))

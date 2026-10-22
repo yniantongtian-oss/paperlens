@@ -4,22 +4,24 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 
 _FENCE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL | re.IGNORECASE)
-_KEYS = (
-    "tldr",
-    "key_contributions",
-    "method",
-    "key_results",
-    "reproduction_notes",
-)
+_KEYS = ("tldr", "key_contributions", "method", "key_results", "reproduction_notes")
 
 
 def parse_model_json(raw: str) -> dict:
     """Parse a model response into the PaperLens report object.
 
-    Markdown fences and surrounding prose are ignored. ``key_contributions``
-    and ``key_results`` accept either a string or a list of strings.
+    The object must be JSON (fences and surrounding prose are ignored).
+    Required fields:
+
+    - ``tldr``, ``method``, ``reproduction_notes``: strings, default ``""``
+    - ``key_contributions``, ``key_results``: lists of strings, default ``[]``
+
+    A string is accepted in place of a list. Missing fields are filled with
+    those defaults and named on stderr. A response that is not a JSON object
+    is an error.
     """
     text = raw.strip()
     fenced = _FENCE.search(text)
@@ -35,17 +37,21 @@ def parse_model_json(raw: str) -> dict:
         raise SystemExit(f"[!] Could not parse JSON report: {exc}") from None
     if not isinstance(data, dict):
         raise SystemExit("[!] JSON report was not an object.")
+
     missing = [key for key in _KEYS if key not in data]
     if missing:
         joined = ", ".join(missing)
-        raise SystemExit(f"[!] JSON report is missing keys: {joined}")
+        print(
+            f"[!] JSON report is missing fields: {joined}. Filled with defaults.",
+            file=sys.stderr,
+        )
 
     ordered: dict = {
-        "tldr": _as_str(data["tldr"]),
-        "key_contributions": _as_list(data["key_contributions"]),
-        "method": _as_str(data["method"]),
-        "key_results": _as_list(data["key_results"]),
-        "reproduction_notes": _as_str(data["reproduction_notes"]),
+        "tldr": _as_str(data.get("tldr", "")),
+        "key_contributions": _as_list(data.get("key_contributions", [])),
+        "method": _as_str(data.get("method", "")),
+        "key_results": _as_list(data.get("key_results", [])),
+        "reproduction_notes": _as_str(data.get("reproduction_notes", "")),
     }
     for key, value in data.items():
         if key not in ordered and key != "meta":

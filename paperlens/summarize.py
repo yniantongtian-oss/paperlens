@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import json
 import sys
+from collections.abc import Callable
 
-from paperlens.backends import call_backend, resolve_model
+from paperlens.backends import DEFAULT_RETRIES, call_backend, resolve_model
 from paperlens.prompt import build_prompt
 from paperlens.report import parse_model_json
 from paperlens.sections import plan_chunks
@@ -21,6 +22,9 @@ def summarize(
     max_chars: int = DEFAULT_MAX_CHARS,
     output_format: str = "markdown",
     base_url: str | None = None,
+    timeout: float | None = None,
+    retries: int = DEFAULT_RETRIES,
+    no_cache: bool = False,
 ) -> str:
     """Summarize *text* with *backend*.
 
@@ -35,6 +39,17 @@ def summarize(
     if not cleaned:
         raise SystemExit("[!] No text extracted — is this a scanned PDF? (OCR is out of scope.)")
 
+    def complete(prompt: str) -> str:
+        return call_backend(
+            prompt,
+            backend,
+            model,
+            base_url=base_url,
+            timeout=timeout,
+            retries=retries,
+            no_cache=no_cache,
+        )
+
     chunks = plan_chunks(cleaned, max_chars)
     if not chunks:
         raise SystemExit("[!] No text extracted — is this a scanned PDF? (OCR is out of scope.)")
@@ -47,22 +62,20 @@ def summarize(
             file=sys.stderr,
         )
         partials = [
-            _map_chunk(chunk.title, chunk.text, backend, model, base_url, max_chars)
-            for chunk in chunks
+            _map_chunk(chunk.title, chunk.text, backend, max_chars, complete) for chunk in chunks
         ]
         raw, prompt = _reduce(
             partials,
             backend=backend,
-            model=model,
-            base_url=base_url,
             max_chars=max_chars,
             output_format=output_format,
+            complete=complete,
         )
         section_titles = [chunk.title for chunk in chunks]
         chunk_count = len(chunks)
     else:
         prompt = build_prompt(cleaned, output_format=output_format, mode="full")
-        raw = call_backend(prompt, backend, model, base_url=base_url)
+        raw = complete(prompt)
         section_titles = []
         chunk_count = 1
 
@@ -81,15 +94,14 @@ def _map_chunk(
     title: str,
     text: str,
     backend: str,
-    model: str | None,
-    base_url: str | None,
     max_chars: int,
+    complete: Callable[[str], str],
 ) -> str:
     if backend == "echo":
         # Keep the whole chunk. Echo never sends it to a model.
         return _labeled(title, text, limit=len(title) + len(text) + 16)
     prompt = build_prompt(text, mode="section", section_title=title)
-    summary = call_backend(prompt, backend, model, base_url=base_url)
+    summary = complete(prompt)
     return _labeled(title, summary, limit=_note_limit(max_chars))
 
 
@@ -109,10 +121,9 @@ def _reduce(
     partials: list[str],
     *,
     backend: str,
-    model: str | None,
-    base_url: str | None,
     max_chars: int,
     output_format: str,
+    complete: Callable[[str], str],
     depth: int = 0,
 ) -> tuple[str, str]:
     if depth > 12:
@@ -120,7 +131,7 @@ def _reduce(
     if backend == "echo":
         combined = "\n\n".join(part.strip() for part in partials if part.strip())
         prompt = build_prompt(combined, output_format=output_format, mode="reduce")
-        raw = call_backend(prompt, backend, model, base_url=base_url)
+        raw = complete(prompt)
         return raw, prompt
 
     limit = _note_limit(max_chars)
@@ -135,25 +146,16 @@ def _reduce(
         ]
     if len(groups) == 1:
         prompt = build_prompt(groups[0], output_format=output_format, mode="reduce")
-        raw = call_backend(prompt, backend, model, base_url=base_url)
+        raw = complete(prompt)
         return raw, prompt
 
-    intermediates = [
-        call_backend(
-            build_prompt(group, mode="intermediate"),
-            backend,
-            model,
-            base_url=base_url,
-        )
-        for group in groups
-    ]
+    intermediates = [complete(build_prompt(group, mode="intermediate")) for group in groups]
     return _reduce(
         intermediates,
         backend=backend,
-        model=model,
-        base_url=base_url,
         max_chars=max_chars,
         output_format=output_format,
+        complete=complete,
         depth=depth + 1,
     )
 
