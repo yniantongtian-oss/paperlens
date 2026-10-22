@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "paperlens"
+version = "0.2.0"
+description = "Summarize research papers with local or OpenAI-compatible models."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+keywords = ["pdf", "summarization", "research", "ollama", "llm"]
+classifiers = [
+  "Environment :: Console",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Scientific/Engineering",
+]
+dependencies = [
+  "pypdf>=6.21.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+  "ruff>=0.8",
+]
+
+[project.urls]
+Homepage = "https://github.com/yniantongtian-oss/paperlens"
+Repository = "https://github.com/yniantongtian-oss/paperlens"
+
+[project.scripts]
+paperlens = "paperlens.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["paperlens*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+extend-exclude = [".venv", "dist", "build"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["paperlens"]
