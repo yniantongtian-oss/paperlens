@@ -64,6 +64,31 @@ paperlens notes.txt --backend echo --format json
 paperlens paper.pdf --max-chars 8000 -o report.md
 ```
 
+`--pages` reads a 1-based inclusive range from a PDF. `1-5` is pages 1 through 5, `3` is one page, and `1-3,8` is a list of ranges. It applies to PDFs only.
+
+```bash
+paperlens paper.pdf --pages 1-5 -o report.md
+```
+
+`--timeout` is the HTTP timeout in seconds (600 for Ollama, 300 for Groq and OpenAI-compatible hosts). `--retries` is how many extra attempts follow an HTTP 429 or 5xx (default `2`). The wait doubles each time, starting at half a second and stopping at 8 seconds. Any other HTTP status fails immediately. The final error includes the status, the number of attempts, and a short snippet of the body.
+
+```bash
+paperlens paper.pdf --timeout 180 --retries 4
+```
+
+A successful model response is stored on disk. The file name is the SHA-256 of the prompt, the backend, and the model, so the same request is not sent twice. `--no-cache` skips the lookup and the write. `echo` is never cached. A hit does not contact the provider. Set `PAPERLENS_CACHE` to choose the directory; otherwise PaperLens uses `$XDG_CACHE_HOME/paperlens` or `~/.cache/paperlens`. The key does not include `--base-url`, so two OpenAI-compatible hosts that share a model name share a cache entry.
+
+```bash
+paperlens paper.pdf --no-cache
+```
+
+Several files, or a directory, produce one report per paper. A directory is scanned one level deep for `.pdf`, `.txt`, and `.md` (hidden files are skipped). With more than one paper, `-o` must be a directory and each report is named from the source stem (`.md` or `.json`). Without `-o`, the reports go to stdout, each marked with the file name.
+
+```bash
+paperlens a.pdf b.pdf -o reports/
+paperlens papers/ -o reports/
+```
+
 ## Report shape
 
 Markdown reports use these sections, in order:
@@ -76,7 +101,7 @@ Markdown reports use these sections, in order:
 
 The prompt tells the model to say when the text is missing or unclear.
 
-`--format json` asks the model for one object. PaperLens parses it (fences are fine) and adds a `meta` object about the run:
+`--format json` asks the model for one object. PaperLens parses it (fences are fine), checks the report schema, and adds a `meta` object about the run. A response that is not a JSON object is an error. Missing fields are filled with defaults (`""` for text, `[]` for lists) and named on stderr:
 
 ```json
 {
@@ -96,7 +121,7 @@ The prompt tells the model to say when the text is missing or unclear.
 }
 ```
 
-`key_contributions` and `key_results` are normalized to lists of strings.
+`key_contributions` and `key_results` accept a string or a list of strings, and are stored as lists.
 
 ## How a long paper is read
 
@@ -139,10 +164,11 @@ CI runs ruff and pytest on Python 3.11 and 3.12.
 
 ## Limitations
 
-- A scanned PDF has no text layer. PaperLens stops and says so. OCR is out of scope.
+- A scanned PDF has no text layer. PaperLens stops and says so. `--pages` cannot OCR a page.
 - Section detection needs the heading on its own line. When extraction glues a heading onto the paragraph, that stretch is chunked by size and titled `Document`.
+- Cached responses are reused until you pass `--no-cache`. Changing `--base-url` but not the model name still hits the old entry.
 - The briefing is only as careful as the model. Check claims against the paper.
 
 ## License
 
-MIT
+[MIT](LICENSE)

@@ -157,6 +157,95 @@ def test_version_matches_pyproject_and_flag():
     assert __version__ in proc.stdout
 
 
+def test_pages_on_tiny_pdf(capsys):
+    fixture = ROOT / "tests" / "fixtures" / "tiny.pdf"
+    assert main([str(fixture), "--backend", "echo", "--pages", "1"]) == 0
+    assert "Widgets improve by 12 percent." in capsys.readouterr().out
+    with pytest.raises(SystemExit, match="outside"):
+        main([str(fixture), "--backend", "echo", "--pages", "1-5"])
+
+
+def test_batch_directory_writes_one_report_per_file(tmp_path: Path, capsys):
+    papers = tmp_path / "papers"
+    nested = papers / "nested"
+    nested.mkdir(parents=True)
+    (papers / "alpha.txt").write_text("Alpha finding.\n", encoding="utf-8")
+    (papers / "beta.txt").write_text("Beta finding.\n", encoding="utf-8")
+    (papers / "notes.csv").write_text("comma,separated\n", encoding="utf-8")
+    (papers / ".hidden.txt").write_text("secret\n", encoding="utf-8")
+    (nested / "skipped.txt").write_text("nested finding.\n", encoding="utf-8")
+    dest = tmp_path / "reports"
+    assert main([str(papers), "--backend", "echo", "-o", str(dest)]) == 0
+    alpha = (dest / "alpha.md").read_text(encoding="utf-8")
+    beta = (dest / "beta.md").read_text(encoding="utf-8")
+    assert "Alpha finding." in alpha
+    assert "Beta finding." in beta
+    assert not (dest / "notes.md").exists()
+    assert not (dest / ".hidden.md").exists()
+    assert not (dest / "skipped.md").exists()
+    err = capsys.readouterr().err
+    assert str(dest / "alpha.md") in err
+    assert str(dest / "beta.md") in err
+
+
+def test_batch_files_stdout_and_json_directory(tmp_path: Path, capsys):
+    alpha = tmp_path / "alpha.txt"
+    beta = tmp_path / "beta.txt"
+    alpha.write_text("File A.\n", encoding="utf-8")
+    beta.write_text("File B.\n", encoding="utf-8")
+    assert main([str(alpha), str(beta), "--backend", "echo"]) == 0
+    out = capsys.readouterr().out
+    assert "<!-- alpha.txt -->" in out
+    assert "<!-- beta.txt -->" in out
+    assert out.index("File A.") < out.index("File B.")
+
+    dest = tmp_path / "reports"
+    assert (
+        main([str(alpha), str(beta), "--backend", "echo", "--format", "json", "-o", str(dest)]) == 0
+    )
+    written = (dest / "alpha.json").read_text(encoding="utf-8")
+    assert "File A." in written
+    assert "File B." in (dest / "beta.json").read_text(encoding="utf-8")
+    assert not (dest / "alpha.md").exists()
+
+
+def test_batch_output_must_be_a_directory(tmp_path: Path):
+    alpha = tmp_path / "alpha.txt"
+    beta = tmp_path / "beta.txt"
+    alpha.write_text("File A.\n", encoding="utf-8")
+    beta.write_text("File B.\n", encoding="utf-8")
+    dest = tmp_path / "report.md"
+    dest.write_text("existing\n", encoding="utf-8")
+    with pytest.raises(SystemExit, match="directory"):
+        main([str(alpha), str(beta), "--backend", "echo", "-o", str(dest)])
+
+
+def test_timeout_retries_and_forwarded_timeout(tmp_path, capture_http):
+    calls = capture_http({"response": "ok"})
+    paper = tmp_path / "paper.txt"
+    paper.write_text("Hello.\n", encoding="utf-8")
+    with pytest.raises(SystemExit, match="timeout"):
+        main([str(paper), "--timeout", "0"])
+    with pytest.raises(SystemExit, match="retries"):
+        main([str(paper), "--retries", "-1"])
+    assert (
+        main(
+            [
+                str(paper),
+                "--backend",
+                "ollama",
+                "--timeout",
+                "15",
+                "--retries",
+                "0",
+                "--no-cache",
+            ]
+        )
+        == 0
+    )
+    assert calls[0].timeout_seconds == 15
+
+
 def test_console_script_help():
     exe = Path(sys.executable).with_name("paperlens")
     if not exe.is_file():
@@ -170,3 +259,7 @@ def test_console_script_help():
     assert "12000" in proc.stdout
     assert "openai" in proc.stdout
     assert "--format" in proc.stdout
+    assert "--timeout" in proc.stdout
+    assert "--retries" in proc.stdout
+    assert "--pages" in proc.stdout
+    assert "--no-cache" in proc.stdout
